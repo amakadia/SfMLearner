@@ -73,6 +73,25 @@ def euler2mat(z, y, x):
   rotMat = tf.matmul(tf.matmul(xmat, ymat), zmat)
   return rotMat
 
+
+def r_from_svd(p9):
+    """Input shape is [B, 9], output shape [B, 3, 3]."""
+    m = tf.reshape(p9, (-1, 3, 3))
+
+    # The orignal code manually scales Euler angles (scale=0.01) guiding the rotation matrix
+    # towards the idendity rotation. We assume network produces offests from identity to match
+    # this so hopefully the training times can be comparable (since there is no separate validation
+    # set in the data).
+    m = tf.eye(3, batch_shape=tf.shape(m)[:1], dtype=m.dtype) + m
+    _, u, v = tf.svd(m)
+    det = tf.linalg.det(tf.matmul(u, v, transpose_b=True))
+    # Check orientation reflection.
+    r = tf.matmul(
+            tf.concat([u[:, :, :-1], u[:, :, -1:] * tf.reshape(det, [-1, 1, 1])], 2),
+            v, transpose_b=True)
+    return r
+
+
 def pose_vec2mat(vec):
   """Converts 6DoF parameters to transformation matrix
   Args:
@@ -83,10 +102,8 @@ def pose_vec2mat(vec):
   batch_size, _ = vec.get_shape().as_list()
   translation = tf.slice(vec, [0, 0], [-1, 3])
   translation = tf.expand_dims(translation, -1)
-  rx = tf.slice(vec, [0, 3], [-1, 1])
-  ry = tf.slice(vec, [0, 4], [-1, 1])
-  rz = tf.slice(vec, [0, 5], [-1, 1])
-  rot_mat = euler2mat(rz, ry, rx)
+  r_input = tf.slice(vec, [0, 3], [-1, 9])
+  rot_mat = r_from_svd(r_input)
   rot_mat = tf.squeeze(rot_mat, axis=[1])
   filler = tf.constant([0.0, 0.0, 0.0, 1.0], shape=[1, 1, 4])
   filler = tf.tile(filler, [batch_size, 1, 1])
